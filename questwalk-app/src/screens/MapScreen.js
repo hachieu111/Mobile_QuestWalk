@@ -432,7 +432,7 @@ const MapScreen = ({ navigation, route }) => {
             badgeReward: cat.badgeReward + `_${Date.now()}`,
             badgeName: cat.badgeName,
             createdBy: user.uid,     // <-- QUYỀN RIÊNG TƯ: Do user hiện tại tạo
-            visibility: 'friends'    // <-- QUYỀN RIÊNG TƯ: Chỉ hiển thị cho mình và bạn bè
+            visibility: 'private'    // <-- QUYỀN RIÊNG TƯ: Chỉ hiển thị cho duy nhất user này (Nhiệm vụ riêng tư)
           };
 
           await setDoc(doc(db, 'gps_quests', newQuest.id), newQuest);
@@ -473,7 +473,7 @@ const MapScreen = ({ navigation, route }) => {
             badgeReward: cat.badgeReward + `_${Date.now()}`,
             badgeName: cat.badgeName,
             createdBy: user.uid,     // <-- QUYỀN RIÊNG TƯ: Do user hiện tại tạo
-            visibility: 'friends'    // <-- QUYỀN RIÊNG TƯ: Chỉ hiển thị cho mình và bạn bè
+            visibility: 'private'    // <-- QUYỀN RIÊNG TƯ: Chỉ hiển thị cho duy nhất user này (Nhiệm vụ riêng tư)
           };
           
           await setDoc(doc(db, 'gps_quests', newQuest.id), newQuest);
@@ -863,6 +863,7 @@ const MapScreen = ({ navigation, route }) => {
             <TextInput
               style={styles.input}
               placeholder="Tên thử thách (VD: Đến nhà tui chơi)"
+              placeholderTextColor="#ffffff"
               value={customQuestTitle}
               onChangeText={setCustomQuestTitle}
             />
@@ -870,6 +871,7 @@ const MapScreen = ({ navigation, route }) => {
             <TextInput
               style={styles.input}
               placeholder="Treo thưởng bao nhiêu Xu?"
+              placeholderTextColor="#ffffff"
               keyboardType="numeric"
               value={customQuestCoins}
               onChangeText={setCustomQuestCoins}

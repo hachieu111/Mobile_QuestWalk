@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Linking, Image, ScrollView } from 'react-native';
 import { Pedometer } from 'expo-sensors';
 import { useFocusEffect } from '@react-navigation/native';
-import { doc, setDoc, getDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import useQuestStore from '../store/useQuestStore';
 import api from '../services/api';
@@ -15,6 +15,9 @@ const HomeScreen = ({ navigation }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState('checking');
   const [badgeCount, setBadgeCount] = useState(0);
+  const [locketPosts, setLocketPosts] = useState([]);
+  const [isLocketLoading, setIsLocketLoading] = useState(true);
+  const [friendIds, setFriendIds] = useState([]);
   const subscriptionRef = React.useRef(null);
   const lastPedometerStepsRef = React.useRef(0);
 
@@ -39,13 +42,70 @@ const HomeScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
+      let isMounted = true;
       if (user?.uid) {
+        // 1. Lấy số lượng huy hiệu
         getDocs(collection(db, `users/${user.uid}/badges`))
-          .then(snap => setBadgeCount(snap.size))
+          .then(snap => {
+            if (isMounted) setBadgeCount(snap.size);
+          })
           .catch(err => console.error(err));
+
+        // 2. Tải Locket Feed (Đảm bảo lọc theo đúng tiêu chí Locket: Chỉ hiển thị bài của mình hoặc bạn bè)
+        const fetchLocketFeed = async () => {
+          try {
+            if (isMounted) setIsLocketLoading(true);
+            
+            // Lấy danh sách bạn bè hiện tại
+            const userDocRef = doc(db, 'users', user.uid);
+            const userDocSnap = await getDoc(userDocRef);
+            const fetchedFriendIds = userDocSnap.data()?.friendIds || [];
+            if (isMounted) setFriendIds(fetchedFriendIds);
+
+            // Truy vấn Locket mới nhất
+            const qLocket = query(collection(db, 'locket_posts'), orderBy('createdAt', 'desc'), limit(15));
+            const locketSnap = await getDocs(qLocket);
+            const posts = [];
+            locketSnap.forEach(d => {
+              posts.push({ id: d.id, ...d.data() });
+            });
+
+            // Lọc: Chỉ hiển thị Locket của bản thân hoặc của bạn bè
+            const visiblePosts = posts.filter(post => 
+              post.userId === user.uid || fetchedFriendIds.includes(post.userId)
+            );
+
+            if (isMounted) {
+              setLocketPosts(visiblePosts);
+            }
+          } catch (error) {
+            console.error("Lỗi fetch Locket Feed:", error);
+          } finally {
+            if (isMounted) setIsLocketLoading(false);
+          }
+        };
+
+        fetchLocketFeed();
       }
+
+      return () => {
+        isMounted = false;
+      };
     }, [user])
   );
+
+  const formatRelativeTime = (timestamp) => {
+    if (!timestamp) return 'Vừa xong';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Vừa xong';
+    if (diffMins < 60) return `${diffMins} phút trước`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours} giờ trước`;
+    return date.toLocaleDateString('vi-VN');
+  };
 
   const checkPermissionAndSubscribe = async () => {
     try {
@@ -213,6 +273,76 @@ const HomeScreen = ({ navigation }) => {
             <Text style={[styles.syncHint, { color: '#3a4a49' }]}>Bộ sưu tập</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Bảng tin Locket Hành Trình */}
+        <View style={styles.locketHeaderContainer}>
+          <Text style={styles.sectionTitle}>Locket Hành Trình Bạn Bè</Text>
+          <View style={styles.locketLiveTag}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
+        </View>
+
+        {isLocketLoading ? (
+          <View style={styles.locketLoader}>
+            <ActivityIndicator size="small" color="#00fbfb" />
+          </View>
+        ) : locketPosts.length === 0 ? (
+          <View style={styles.emptyLocketCard}>
+            <Ionicons name="camera-outline" size={32} color="rgba(0, 251, 251, 0.4)" style={{ marginBottom: 8 }} />
+            <Text style={styles.emptyLocketText}>Chưa có khoảnh khắc Locket nào.</Text>
+            <Text style={styles.emptyLocketSubtext}>Hãy ra ngoài đi bộ, check-in rương xu và đăng Locket để khoe với hội bạn nhé!</Text>
+          </View>
+        ) : (
+          <ScrollView
+            horizontal={true}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.locketScrollContainer}
+          >
+            {locketPosts.map((post) => (
+              <View key={post.id} style={styles.locketCard}>
+                {/* Header: User Info */}
+                <View style={styles.locketCardHeader}>
+                  <View style={styles.locketUserAvatarContainer}>
+                    {post.userAvatarUrl ? (
+                      <Image source={{ uri: post.userAvatarUrl }} style={styles.locketUserAvatar} />
+                    ) : (
+                      <View style={styles.locketUserPlaceholder}>
+                        <Text style={styles.locketUserPlaceholderText}>
+                          {post.userEmail ? post.userEmail.charAt(0).toUpperCase() : 'U'}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.locketUserName}>
+                      {post.userId === user?.uid ? 'Bạn' : post.userEmail.split('@')[0]}
+                    </Text>
+                    <Text style={styles.locketTime}>{formatRelativeTime(post.createdAt)}</Text>
+                  </View>
+                </View>
+
+                {/* Main image */}
+                <View style={styles.locketImageWrapper}>
+                  <Image source={{ uri: post.imageUrl }} style={styles.locketImage} />
+                  <View style={styles.locketQuestTag}>
+                    <Ionicons name="location" size={10} color="#0d1515" style={{ marginRight: 3 }} />
+                    <Text style={styles.locketQuestTagText} numberOfLines={1}>
+                      {post.questTitle}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Caption / Feeling */}
+                <View style={styles.locketCaptionContainer}>
+                  <Text style={styles.locketCaptionText} numberOfLines={2}>
+                    {post.caption}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        )}
 
         {/* Menu Tính năng */}
         <Text style={styles.sectionTitle}>Tính năng Nổi bật</Text>
@@ -552,6 +682,163 @@ const styles = StyleSheet.create({
     backgroundColor: '#FF3B30',
     borderWidth: 1,
     borderColor: '#0d1515',
+  },
+  locketHeaderContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  locketLiveTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 75, 75, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 75, 75, 0.4)',
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#FF4B4B',
+    marginRight: 5,
+  },
+  liveText: {
+    color: '#FF4B4B',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  locketLoader: {
+    height: 180,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(41, 50, 50, 0.2)',
+    borderRadius: 20,
+    marginBottom: 24,
+  },
+  emptyLocketCard: {
+    padding: 24,
+    borderRadius: 20,
+    backgroundColor: 'rgba(41, 50, 50, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 251, 251, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  emptyLocketText: {
+    color: '#00fbfb',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 6,
+  },
+  emptyLocketSubtext: {
+    color: '#839493',
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  locketScrollContainer: {
+    paddingRight: 20,
+    paddingBottom: 8,
+  },
+  locketCard: {
+    width: 250,
+    backgroundColor: 'rgba(41, 50, 50, 0.3)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 251, 251, 0.15)',
+    padding: 12,
+    marginRight: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
+    marginBottom: 16,
+  },
+  locketCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  locketUserAvatarContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+    borderWidth: 1.5,
+    borderColor: '#00fbfb',
+    overflow: 'hidden',
+  },
+  locketUserAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+  locketUserPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#151d1d',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  locketUserPlaceholderText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  locketUserName: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  locketTime: {
+    color: '#839493',
+    fontSize: 10,
+    marginTop: 1,
+  },
+  locketImageWrapper: {
+    width: '100%',
+    height: 150,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  locketImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  locketQuestTag: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#00fbfb',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    maxWidth: '90%',
+  },
+  locketQuestTagText: {
+    color: '#0d1515',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  locketCaptionContainer: {
+    backgroundColor: 'rgba(13, 21, 21, 0.4)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  locketCaptionText: {
+    color: '#dbe4e3',
+    fontSize: 12,
+    lineHeight: 16,
   }
 });
 
