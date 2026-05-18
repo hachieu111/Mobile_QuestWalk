@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "questwalk-app",
+    "name": "QuestWalk",
     "slug": "questwalk-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -21,8 +21,33 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["ACTIVITY_RECOGNITION"]
+      "permissions": [
+        "CAMERA",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACTIVITY_RECOGNITION"
+      ]
     },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "QuestWalk cần quyền truy cập camera để thực hiện AR Check-in."
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "QuestWalk cần quyền truy cập cảm biến chuyển động để đếm bước chân của bạn."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "QuestWalk cần quyền truy cập thư viện để thay đổi Avatar."
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     }
