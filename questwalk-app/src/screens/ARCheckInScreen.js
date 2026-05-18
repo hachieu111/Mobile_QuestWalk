@@ -1,18 +1,35 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  View, 
+  StyleSheet, 
+  Text, 
+  TouchableOpacity, 
+  Alert, 
+  ActivityIndicator, 
+  Animated, 
+  Dimensions 
+} from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { db } from '../services/firebaseConfig';
 import useQuestStore from '../store/useQuestStore';
 
+const { width, height } = Dimensions.get('window');
+const TARGET_X = width - 75; // Vị trí X của cụm hiển thị Xu ở góc phải
+const TARGET_Y = 65;         // Vị trí Y của cụm hiển thị Xu ở góc phải
+
 const ARCheckInScreen = ({ route, navigation }) => {
   const { quest } = route.params;
   const user = useQuestStore((state) => state.user);
-  const { setCoinBalance } = useQuestStore();
+  const { coinBalance, setCoinBalance } = useQuestStore();
   
   const [permission, requestPermission] = useCameraPermissions();
   const [isCapturing, setIsCapturing] = useState(false);
+  
+  // Trạng thái hạt coin bay nổi
+  const [particles, setParticles] = useState([]);
+  const coinScaleAnim = useRef(new Animated.Value(1)).current;
 
   if (!permission) {
     return <View />;
@@ -29,10 +46,89 @@ const ARCheckInScreen = ({ route, navigation }) => {
     );
   }
 
+  // Hoạt ảnh nổ sao và bay lượn ngập tràn rực rỡ
+  const playClaimAnimation = (rewardAmount) => {
+    const newParticles = Array.from({ length: 12 }).map((_, index) => {
+      return {
+        id: index,
+        position: new Animated.ValueXY({ x: width / 2, y: height / 2 }),
+        opacity: new Animated.Value(1),
+        scale: new Animated.Value(0.5),
+      };
+    });
+
+    setParticles(newParticles);
+
+    const animations = newParticles.map((particle, index) => {
+      const angle = (index / 12) * 2 * Math.PI + (Math.random() * 0.4 - 0.2);
+      const radius = 60 + Math.random() * 50;
+      const explodeX = width / 2 + Math.cos(angle) * radius;
+      const explodeY = (height / 2) + Math.sin(angle) * radius;
+      const delay = index * 40;
+
+      return Animated.sequence([
+        // 1. Nổ tung tròn từ tâm hologram
+        Animated.parallel([
+          Animated.timing(particle.position, {
+            toValue: { x: explodeX, y: explodeY },
+            duration: 250,
+            useNativeDriver: true,
+          }),
+          Animated.timing(particle.scale, {
+            toValue: 1.3,
+            duration: 250,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Trễ nhịp bay
+        Animated.delay(delay),
+        // 2. Thu hút bay thẳng lên rương xu góc trên phải
+        Animated.parallel([
+          Animated.timing(particle.position, {
+            toValue: { x: TARGET_X, y: TARGET_Y },
+            duration: 550,
+            useNativeDriver: true,
+          }),
+          Animated.timing(particle.scale, {
+            toValue: 0.6,
+            duration: 550,
+            useNativeDriver: true,
+          }),
+          Animated.timing(particle.opacity, {
+            toValue: 0,
+            duration: 550,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]);
+    });
+
+    Animated.parallel(animations).start(() => {
+      setParticles([]);
+
+      // Hiệu ứng Pulse nhẹ cho hòm xu khi nhận sao thành công
+      Animated.sequence([
+        Animated.timing(coinScaleAnim, { toValue: 1.25, duration: 150, useNativeDriver: true }),
+        Animated.timing(coinScaleAnim, { toValue: 1.0, duration: 150, useNativeDriver: true }),
+      ]).start();
+
+      // Cập nhật số ví local sau khi bay xong
+      const questStoreState = useQuestStore.getState();
+      setCoinBalance(questStoreState.coinBalance + rewardAmount);
+
+      // Hiển thị thông báo thành công sau cùng cực kỳ hợp lý
+      Alert.alert(
+        '🎉 Check-in Thành Công!',
+        `Tuyệt vời! Bạn đã nhận được Huy hiệu "${quest.badgeName}" và ${rewardAmount} Xu!`,
+        [{ text: 'Về Bản Đồ', onPress: () => navigation.goBack() }]
+      );
+    });
+  };
+
   const handleCapture = async () => {
     setIsCapturing(true);
     
-    // Giả lập hiệu ứng chụp ảnh mất 1 giây
+    // Giả lập hiệu ứng chụp ảnh check-in ảo mất 1.5 giây
     setTimeout(async () => {
       try {
         if (!user?.uid) return;
@@ -46,22 +142,16 @@ const ARCheckInScreen = ({ route, navigation }) => {
           earnedAt: serverTimestamp(),
         });
 
-        // Cộng xu vào ví
+        // Cộng xu trên server Firestore
         const userRef = doc(db, 'users', user.uid);
         await setDoc(userRef, {
           coinBalance: increment(quest.coinReward),
           totalBadges: increment(1)
         }, { merge: true });
 
-        // Tự động update coin cục bộ (nếu backend đồng bộ chậm, nhưng UI sẽ tự kéo lại sớm)
-        const questStoreState = useQuestStore.getState();
-        setCoinBalance(questStoreState.coinBalance + quest.coinReward);
+        // Chạy hiệu ứng bay tiền bùng nổ đẹp đẽ
+        playClaimAnimation(quest.coinReward);
 
-        Alert.alert(
-          '🎉 Check-in Thành Công!',
-          `Tuyệt vời! Bạn đã nhận được Huy hiệu "${quest.badgeName}" và ${quest.coinReward} Xu!`,
-          [{ text: 'Về Bản Đồ', onPress: () => navigation.goBack() }]
-        );
       } catch (error) {
         console.error("Lỗi khi save badge:", error);
         Alert.alert("Lỗi", "Không thể lưu kết quả. Vui lòng thử lại.");
@@ -78,6 +168,12 @@ const ARCheckInScreen = ({ route, navigation }) => {
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="close" size={32} color="#FFF" />
         </TouchableOpacity>
+
+        {/* Floating Coin Container (Góc trên phải) */}
+        <Animated.View style={[styles.coinHeaderContainer, { transform: [{ scale: coinScaleAnim }] }]}>
+          <Ionicons name="star" size={16} color="#FFD700" style={{ marginRight: 4 }} />
+          <Text style={styles.coinText}>{coinBalance} Xu</Text>
+        </Animated.View>
 
         {/* Lớp phủ AR ảo diệu */}
         <View style={styles.arOverlay}>
@@ -104,6 +200,26 @@ const ARCheckInScreen = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
       </CameraView>
+
+      {/* HIỆU ỨNG HẠT NGÔI SAO BAY PHỦ LÊN TRÊN (OVERLAY) */}
+      {particles.map((particle) => (
+        <Animated.View
+          key={particle.id}
+          style={[
+            styles.particle,
+            {
+              transform: [
+                { translateX: particle.position.x },
+                { translateY: particle.position.y },
+                { scale: particle.scale },
+              ],
+              opacity: particle.opacity,
+            },
+          ]}
+        >
+          <Ionicons name="star" size={20} color="#FFD700" style={styles.particleGlow} />
+        </Animated.View>
+      ))}
     </View>
   );
 };
@@ -145,6 +261,29 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
     borderRadius: 20,
     padding: 4,
+  },
+  coinHeaderContainer: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(13, 21, 21, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.4)',
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+  },
+  coinText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#FFD700',
   },
   arOverlay: {
     flex: 1,
@@ -215,7 +354,18 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     backgroundColor: '#FFF',
-  }
+  },
+  particle: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    zIndex: 9999,
+  },
+  particleGlow: {
+    textShadowColor: 'rgba(255, 215, 0, 0.8)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
+  },
 });
 
 export default ARCheckInScreen;

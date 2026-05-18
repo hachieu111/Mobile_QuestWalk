@@ -10,8 +10,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const ProfileScreen = ({ navigation }) => {
-  const { user, totalSteps, coinBalance, avatarUrl, setUser, setTotalSteps, setCoinBalance, setAvatarUrl } = useQuestStore();
+  const { user, totalSteps, currentStepCount, coinBalance, avatarUrl, setUser, setTotalSteps, setCoinBalance, setAvatarUrl } = useQuestStore();
   const [isUploading, setIsUploading] = useState(false);
+
+  const displaySteps = totalSteps + currentStepCount;
 
   const handleChangeAvatar = async () => {
     try {
@@ -127,7 +129,7 @@ const ProfileScreen = ({ navigation }) => {
       <View style={styles.statsContainer}>
         <View style={styles.statBox}>
           <Ionicons name="footsteps" size={28} color="#00fbfb" />
-          <Text style={styles.statValue}>{totalSteps}</Text>
+          <Text style={styles.statValue}>{displaySteps}</Text>
           <Text style={styles.statLabel}>Tổng số bước</Text>
         </View>
         <View style={styles.statDivider} />

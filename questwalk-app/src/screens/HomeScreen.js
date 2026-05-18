@@ -10,13 +10,13 @@ import { db } from '../services/firebaseConfig';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const HomeScreen = ({ navigation }) => {
-  const { user, totalSteps, coinBalance, avatarUrl, setTotalSteps, setCoinBalance, setAvatarUrl } = useQuestStore();
+  const { user, totalSteps, currentStepCount, coinBalance, avatarUrl, setTotalSteps, setCurrentStepCount, addSteps, setCoinBalance, setAvatarUrl } = useQuestStore();
   const [isPedometerAvailable, setIsPedometerAvailable] = useState('checking');
-  const [currentStepCount, setCurrentStepCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState('checking');
   const [badgeCount, setBadgeCount] = useState(0);
   const subscriptionRef = React.useRef(null);
+  const lastPedometerStepsRef = React.useRef(0);
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -60,8 +60,13 @@ const HomeScreen = ({ navigation }) => {
           if (subscriptionRef.current) {
             subscriptionRef.current.remove();
           }
+          lastPedometerStepsRef.current = 0;
           subscriptionRef.current = Pedometer.watchStepCount((result) => {
-            setCurrentStepCount(result.steps);
+            const delta = result.steps - lastPedometerStepsRef.current;
+            lastPedometerStepsRef.current = result.steps;
+            if (delta > 0) {
+              addSteps(delta);
+            }
           });
         }
       }
@@ -81,28 +86,32 @@ const HomeScreen = ({ navigation }) => {
 
   const handleSyncSteps = async () => {
     if (!user || !user.uid) return;
-    if (currentStepCount === 0) {
-      Alert.alert('Thông báo', 'Bạn chưa bước thêm bước nào để đồng bộ.');
-      return;
-    }
+    const stepsToSync = currentStepCount;
+    if (stepsToSync === 0) return;
 
+    // 1. Phản hồi giao diện tức thì trong 0ms (Optimistic Update)
+    const expectedNewTotal = totalSteps + stepsToSync;
+    setTotalSteps(expectedNewTotal);
+    setCurrentStepCount(0);
     setIsSyncing(true);
+
+    // 2. Chạy API đồng bộ ngầm dưới background
     try {
       const response = await api.post('/api/sync-steps', {
         userId: user.uid,
-        steps: currentStepCount,
+        steps: stepsToSync,
       });
 
-      setCurrentStepCount(0);
-      
       if (response.data) {
         if (response.data.coinBalance !== undefined) setCoinBalance(response.data.coinBalance);
         if (response.data.totalSteps !== undefined) setTotalSteps(response.data.totalSteps);
       }
-      Alert.alert('Thành công', 'Đồng bộ bước chân thành công!');
     } catch (error) {
-      console.error(error);
-      Alert.alert('Lỗi', error.response?.data?.message || 'Không thể đồng bộ bước chân lúc này.');
+      console.error("Lỗi đồng bộ ngầm:", error);
+      // Hoàn tác lại (Rollback) số bước local để người dùng không bị mất bước đi bộ nếu mất mạng hoàn toàn
+      setCurrentStepCount(stepsToSync);
+      setTotalSteps(expectedNewTotal - stepsToSync);
+      Alert.alert('Đồng bộ thất bại', 'Kết nối mạng không ổn định. Vui lòng nhấn thử lại.');
     } finally {
       setIsSyncing(false);
     }
@@ -165,22 +174,35 @@ const HomeScreen = ({ navigation }) => {
         {/* Thống kê nhanh */}
         <Text style={styles.sectionTitle}>Chỉ số Game của bạn</Text>
         <View style={styles.statsRow}>
-          <TouchableOpacity style={styles.statCard} onPress={handleSyncSteps} disabled={isSyncing}>
-            <View style={[styles.statIconBox, { backgroundColor: '#EBFBEE' }]}>
+          <View style={styles.statCard}>
+            <View style={[styles.statIconBox, { backgroundColor: 'rgba(64, 192, 87, 0.1)' }]}>
               <Ionicons name="footsteps" size={28} color="#40C057" />
             </View>
             <Text style={styles.statValue}>{displaySteps}</Text>
             <Text style={styles.statLabel}>Bước chân</Text>
+            
             {currentStepCount > 0 ? (
-              isSyncing ? (
-                <ActivityIndicator size="small" color="#00fbfb" style={{ marginTop: 4 }} />
-              ) : (
-                <Text style={styles.syncHint}>Chạm để đồng bộ (+{currentStepCount})</Text>
-              )
+              <TouchableOpacity 
+                style={styles.smallSyncBtn} 
+                onPress={handleSyncSteps}
+                disabled={isSyncing}
+              >
+                {isSyncing ? (
+                  <ActivityIndicator size="small" color="#00fbfb" />
+                ) : (
+                  <>
+                    <Ionicons name="sync-outline" size={12} color="#00fbfb" style={styles.syncIcon} />
+                    <Text style={styles.syncBtnText}>Đồng bộ (+{currentStepCount})</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             ) : (
-              <Text style={[styles.syncHint, { color: '#3a4a49' }]}>Đã đồng bộ</Text>
+              <View style={styles.syncedBadge}>
+                <Ionicons name="checkmark-circle-outline" size={12} color="#839493" style={styles.syncIcon} />
+                <Text style={styles.syncedText}>Đã đồng bộ</Text>
+              </View>
             )}
-          </TouchableOpacity>
+          </View>
 
           <TouchableOpacity style={styles.statCard} onPress={() => navigation.navigate('Profile')}>
             <View style={[styles.statIconBox, { backgroundColor: 'rgba(255, 215, 0, 0.1)' }]}>
@@ -219,6 +241,22 @@ const HomeScreen = ({ navigation }) => {
         
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Floating Quest Button (RPG game style) */}
+      <TouchableOpacity 
+        style={styles.floatingQuestBtn}
+        onPress={() => navigation.navigate('Quest')}
+        activeOpacity={0.85}
+      >
+        <LinearGradient
+          colors={['#1c2929', '#0d1515']}
+          style={styles.floatingQuestGradient}
+        >
+          <Ionicons name="trophy" size={26} color="#FFD700" style={styles.floatingQuestIcon} />
+          {/* Active indicator dot */}
+          <View style={styles.floatingQuestBadge} />
+        </LinearGradient>
+      </TouchableOpacity>
     </LinearGradient>
   );
 };
@@ -405,11 +443,47 @@ const styles = StyleSheet.create({
     color: '#839493',
     marginTop: 4,
   },
-  syncHint: {
-    fontSize: 11,
+  smallSyncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 251, 251, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 251, 251, 0.4)',
+    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginTop: 10,
+    shadowColor: '#00fbfb',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  syncBtnText: {
     color: '#00fbfb',
-    marginTop: 8,
+    fontSize: 11,
     fontWeight: 'bold',
+  },
+  syncedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(58, 74, 73, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(58, 74, 73, 0.2)',
+    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginTop: 10,
+  },
+  syncedText: {
+    color: '#839493',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  syncIcon: {
+    marginRight: 4,
   },
   featuresGrid: {
     flexDirection: 'row',
@@ -438,6 +512,46 @@ const styles = StyleSheet.create({
     color: '#dbe4e3',
     textAlign: 'center',
     lineHeight: 18,
+  },
+  floatingQuestBtn: {
+    position: 'absolute',
+    right: 20,
+    bottom: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: '#FFD700',
+    backgroundColor: '#0d1515',
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 999,
+  },
+  floatingQuestGradient: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  floatingQuestIcon: {
+    textShadowColor: 'rgba(255, 215, 0, 0.6)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
+  },
+  floatingQuestBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#FF3B30',
+    borderWidth: 1,
+    borderColor: '#0d1515',
   }
 });
 

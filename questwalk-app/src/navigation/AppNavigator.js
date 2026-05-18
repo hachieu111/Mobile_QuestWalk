@@ -8,6 +8,7 @@ import MyVouchersScreen from '../screens/MyVouchersScreen';
 import ARCheckInScreen from '../screens/ARCheckInScreen';
 import FriendsScreen from '../screens/FriendsScreen';
 import ChatScreen from '../screens/ChatScreen';
+import QuestScreen from '../screens/QuestScreen';
 import useQuestStore from '../store/useQuestStore';
 
 const Stack = createStackNavigator();
@@ -21,6 +22,7 @@ const AppNavigator = () => {
         {user ? (
           <>
             <Stack.Screen name="MainTabs" component={MainTabNavigator} />
+            <Stack.Screen name="Quest" component={QuestScreen} />
             <Stack.Screen name="MyVouchers" component={MyVouchersScreen} />
             <Stack.Screen name="ARCheckIn" component={ARCheckInScreen} options={{ presentation: 'fullScreenModal' }} />
             <Stack.Screen name="Friends" component={FriendsScreen} />
