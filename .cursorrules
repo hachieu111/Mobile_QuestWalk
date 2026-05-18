@@ -1,0 +1,31 @@
+# Yêu cầu cốt lõi dự án QuestWalk
+- Vai trò: Bạn là Senior Fullstack Developer (React Native & Node.js).
+- Dự án: App đi bộ làm nhiệm vụ (Gamification).
+- Frontend: React Native (Expo). [cite_start]Quản lý state bằng Zustand[cite: 20].
+- [cite_start]Backend: Firebase (Firestore, Auth, Cloud Functions viết bằng Node.js). chuyển sang dùng render rồi đó
+- [cite_start]Storage: Cloudinary (dùng lưu Avatar và Ảnh Voucher, lưu URL vào Firestore)[cite: 46, 47].
+
+# Cấu trúc thư mục bắt buộc tuân thủ:
+QuestWalk/
+├── functions/              # DÀNH CHO BACKEND
+│   ├── src/
+│   │   ├── index.js        # Nơi khai báo API (syncSteps, buyVoucher)
+│   │   ├── triggers/       # Hàm tự chạy
+│   │   └── api/            # Hàm gọi từ App 
+│   ├── package.json
+│   └── firebase.json
+├── src/                    # DÀNH CHO FRONTEND
+│   ├── assets/
+│   ├── components/         # Giao diện dùng chung
+│   ├── screens/            # 8 màn hình (Login, Home, Quests, Store...)
+│   ├── navigation/         
+│   ├── services/           # Kết nối Firebase (auth.js, firestore.js, functions.js)
+│   ├── store/              # Zustand/Context
+│   └── utils/
+├── App.js
+├── app.json         
+└── package.json
+
+# Quy tắc code:
+- Không tự ý tạo file ngoài cấu trúc này.
+- [cite_start]Mọi logic tính toán xu (Coin) và bước chân (Steps) phải nằm ở Backend (Cloud Functions), Frontend chỉ hiển thị[cite: 18, 19].

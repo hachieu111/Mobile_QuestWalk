@@ -1,0 +1,254 @@
+// ===============================================================
+// firestore.rules — QuestWalk Security Rules (Prototype v1.0)
+// ===============================================================
+//
+// IMPORTANT: These are PROTOTYPE security rules. Review carefully
+// before launching to a broad audience. Run `firebase deploy --only
+// firestore:rules` to apply.
+//
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId} = Firebase Auth UID
+// Fields:
+//   - uid          : string (required, immutable) — matches Auth UID
+//   - email        : string (required, immutable) — email address
+//   - displayName  : string (optional)            — max 100 chars
+//   - avatarUrl    : string (optional)            — https:// URL, max 500 chars
+//   - coinBalance  : number (required, immutable by client) — managed by Cloud Functions ONLY
+//   - totalSteps   : number (required, immutable by client) — managed by Cloud Functions ONLY
+//   - fcmToken     : string | null (optional)     — max 200 chars, updated by client
+//   - createdAt    : timestamp (required, immutable)
+//   - updatedAt    : timestamp (required)
+//
+// Collection: step_logs
+// Document ID: auto-generated
+// Fields:
+//   - userId       : string (required, immutable) — Auth UID
+//   - steps        : number (required)            — positive integer
+//   - source       : string (required)            — one of: health_kit, google_fit, manual
+//   - recordedAt   : timestamp (required)
+//   - syncedAt     : timestamp (required)
+// NOTE: Written exclusively by syncSteps Cloud Function (Admin SDK). No client writes.
+//
+// Collection: quests
+// Document ID: auto-generated
+// Fields:
+//   - title        : string (required)            — max 100 chars
+//   - description  : string (optional)            — max 500 chars
+//   - stepGoal     : number (required)            — positive integer
+//   - coinReward   : number (required)            — non-negative integer
+//   - iconUrl      : string (optional)            — https:// URL
+//   - isActive     : boolean (required)
+//   - createdAt    : timestamp (required)
+// NOTE: Created/managed by Admin. Client can only READ active quests.
+//
+// Collection: vouchers
+// Document ID: auto-generated
+// Fields:
+//   - name         : string (required)            — max 100 chars
+//   - description  : string (optional)            — max 500 chars
+//   - imageUrl     : string (optional)            — https:// URL
+//   - coinCost     : number (required)            — positive integer
+//   - stock        : number (required)            — integer >= -1
+//   - category     : string (optional)            — max 50 chars
+//   - isActive     : boolean (required)
+//   - createdAt    : timestamp (required)
+// NOTE: Created/managed by Admin. Client can only READ active vouchers.
+//
+// Collection: user_vouchers
+// Document ID: auto-generated
+// Fields:
+//   - userId       : string (required, immutable) — Auth UID
+//   - voucherId    : string (required, immutable) — ref to vouchers doc
+//   - voucherName  : string (required, immutable) — snapshot, max 100 chars
+//   - coinSpent    : number (required, immutable) — positive integer
+//   - cardCode     : string | null (optional)     — max 200 chars
+//   - cardSerial   : string | null (optional)     — max 100 chars
+//   - status       : string (required)            — one of: pending, fulfilled, failed
+//   - redeemedAt   : timestamp (required, immutable)
+// NOTE: Created by buyVoucher Cloud Function (Admin SDK). Client can only READ own records.
+//
+// ===============================================================
+// Access Matrix Summary
+// ===============================================================
+//
+//  Collection     | Client Read        | Client Write
+// ----------------+--------------------+----------------------------
+//  users          | owner only         | fcmToken + displayName + avatarUrl only
+//  step_logs      | NONE               | NONE (Cloud Functions only)
+//  quests         | any authenticated  | NONE (Admin only)
+//  vouchers       | any authenticated  | NONE (Admin only)
+//  user_vouchers  | owner only         | NONE (Cloud Functions only)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===========================================================
+    // Helper Functions
+    // ===========================================================
+
+    // Check if the request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user owns the resource by document path segment
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if the authenticated user owns the resource by document field
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    // Ensure immutable fields are not changed on update
+    function fieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate that only the listed fields exist in the document
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate optional string: if present, must be string within length bounds
+    function isValidOptionalString(field, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() <= maxLen);
+    }
+
+    // Validate optional https:// URL
+    function isValidOptionalUrl(field) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() <= 500 &&
+              request.resource.data[field].matches("^https://.*"));
+    }
+
+    // ===========================================================
+    // Domain Validator Functions
+    // ===========================================================
+
+    // Validate user profile fields that the client IS allowed to update:
+    //   displayName, avatarUrl, fcmToken, updatedAt
+    // CRITICAL: coinBalance and totalSteps are NOT in this list —
+    //           they can ONLY be modified by Cloud Functions via Admin SDK.
+    function isValidUserProfileUpdate() {
+      return hasOnlyAllowedFields(['displayName', 'avatarUrl', 'fcmToken', 'updatedAt']) &&
+             isValidOptionalString('displayName', 100) &&
+             isValidOptionalUrl('avatarUrl') &&
+             isValidOptionalString('fcmToken', 200) &&
+             // Ensure immutable core fields are untouched
+             fieldsUnchanged(['uid', 'email', 'coinBalance', 'totalSteps', 'createdAt']);
+    }
+
+    // ===========================================================
+    // Collection: users
+    // ===========================================================
+    // - Read: owner only (contains PII: email)
+    // - Write: owner only, but restricted to safe fields only
+    //          (coinBalance and totalSteps are LOCKED — Cloud Functions only)
+    // - Create: FORBIDDEN from client (onUserCreate trigger handles this)
+    // - Delete: FORBIDDEN
+    // ===========================================================
+    match /users/{userId} {
+      // Only the owner can read their own profile (PII protection)
+      allow read: if isOwner(userId);
+
+      // Client can update ONLY displayName, avatarUrl, fcmToken
+      // coinBalance, totalSteps, uid, email, createdAt are immutable from client
+      allow update: if isOwner(userId) && isValidUserProfileUpdate();
+
+      // Create/delete are forbidden for clients — handled by Cloud Functions
+      allow create: if false;
+      allow delete: if false;
+    }
+
+    // ===========================================================
+    // Collection: step_logs
+    // ===========================================================
+    // Entirely managed by syncSteps Cloud Function (Admin SDK).
+    // No client access whatsoever.
+    // ===========================================================
+    match /step_logs/{logId} {
+      allow read, write: if false;
+    }
+
+    // ===========================================================
+    // Collection: quests
+    // ===========================================================
+    // - Read: any authenticated user (needed to display quest list)
+    // - Write: FORBIDDEN for clients (Admin SDK / console only)
+    // ===========================================================
+    match /quests/{questId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // ===========================================================
+    // Collection: vouchers
+    // ===========================================================
+    // - Read: any authenticated user (needed to display store)
+    // - Write: FORBIDDEN for clients (Admin SDK / console only)
+    // ===========================================================
+    match /vouchers/{voucherId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // ===========================================================
+    // Collection: user_vouchers
+    // ===========================================================
+    // - Read: owner only (filter by userId in queries)
+    // - Write: FORBIDDEN for clients (buyVoucher Cloud Function only)
+    // ===========================================================
+    match /user_vouchers/{userVoucherId} {
+      // Only the owner of the voucher record can read it
+      allow read: if isAuthenticated() && request.auth.uid == resource.data.userId;
+      allow write: if false;
+    }
+
+    // ===========================================================
+    // Default: Deny ALL other paths not explicitly matched above
+    // ===========================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+// ===============================================================
+// Devil's Advocate Attack Summary (Phase 3)
+// ===============================================================
+//
+//  #1  Public list exploit        → BLOCKED: all collections require isAuthenticated()
+//  #2  Unauthorized read/write    → BLOCKED: users/user_vouchers require isOwner()
+//  #3  Update bypass (1MB string) → BLOCKED: hasOnlyAllowedFields + size() checks on update
+//  #4  Ownership hijacking (create)→ BLOCKED: client create on users is `if false`
+//  #5  Ownership hijacking (update)→ BLOCKED: uid/email in fieldsUnchanged()
+//  #6  Immutable field modification→ BLOCKED: createdAt, uid, email, coinBalance, totalSteps in fieldsUnchanged()
+//  #7  Type juggling              → BLOCKED: isValidOptionalString() checks `is string`
+//  #8  Validation bypass (update) → BLOCKED: isValidUserProfileUpdate() runs on every update
+//  #9  DoS / 1MB string           → BLOCKED: maxLen enforced on every string field
+//  #10 Required field omission    → N/A for client updates (only safe fields allowed)
+//  #11 Privilege escalation       → BLOCKED: no role field; coinBalance write is `if false`
+//  #12 Schema pollution           → BLOCKED: hasOnlyAllowedFields() on update
+//  #13 Invalid state transition   → N/A: status field is in user_vouchers (write=false)
+//  #14 Path traversal             → BLOCKED: avatarUrl validated with ^https:// regex
+//  #15 Timestamp manipulation     → BLOCKED: createdAt immutable; updatedAt can be set by client (acceptable)
+//  #16 Negative value             → N/A: coinBalance/totalSteps not writable by client
+//  #17 Mixed content leak (User B reads User A) → BLOCKED: isOwner(userId) on users collection
+//  #18 Counter/action replay      → N/A: counters only writable via Admin SDK
+//  #19 Orphaned subcollection     → N/A: no subcollections defined
+//  #20 Query mismatch             → OK: quests/vouchers allow authenticated read (list supported)
+//  #21 Validator pattern check    → OK: every allow update calls isValidUserProfileUpdate()
+//
+// ===============================================================
